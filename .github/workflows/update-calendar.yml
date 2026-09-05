@@ -1,0 +1,69 @@
+name: Update calendar
+
+on:
+  schedule:
+    # Every Friday at 05:00 UTC (07:00 Prague in summer, 06:00 in winter).
+    - cron: "0 5 * * 5"
+  workflow_dispatch:
+    inputs:
+      allow_shrink:
+        description: "Commit even if the calendar loses events (cancellations, end of season)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-calendar
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    env:
+      FUTSAL_TEAM: Spitfire
+      OUT: spitfire.ics
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Scrape schedule
+        run: python run.py --team "$FUTSAL_TEAM" --ics --out "$OUT"
+
+      - name: Guard against a broken scrape
+        if: github.event.inputs.allow_shrink != 'true'
+        run: |
+          # Played fixtures are carried over inside the .ics, so the event count
+          # must never fall. If it does, the site's markup probably changed and
+          # parse_rows silently returned a partial schedule -- committing that
+          # would delete fixtures from every subscriber's calendar. Genuine
+          # losses (a cancelled match, end of season) go through a manual run
+          # with allow_shrink enabled.
+          before=$(git show "HEAD:$OUT" | grep -c '^BEGIN:VEVENT' || echo 0)
+          after=$(grep -c '^BEGIN:VEVENT' "$OUT" || echo 0)
+          echo "events: $before -> $after"
+          if [ "$after" -lt "$before" ]; then
+            echo "::error::Calendar shrank from $before to $after events; refusing to commit."
+            exit 1
+          fi
+
+      - name: Commit if changed
+        run: |
+          # run.py only refreshes DTSTAMP/LAST-MODIFIED when a fixture actually
+          # changed, so an unchanged schedule produces no diff at all.
+          if git diff --quiet -- "$OUT"; then
+            echo "Schedule unchanged."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$OUT"
+          git commit -m "chore: update $FUTSAL_TEAM schedule"
+          git push

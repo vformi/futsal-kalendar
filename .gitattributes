@@ -1,0 +1,3 @@
+# iCalendar requires CRLF line endings; without this Git would normalise them
+# to LF and the weekly job would see a diff on every single run.
+*.ics -text
