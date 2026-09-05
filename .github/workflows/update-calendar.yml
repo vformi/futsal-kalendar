@@ -2,8 +2,9 @@ name: Update calendar
 
 on:
   schedule:
-    # Every Friday at 05:00 UTC (07:00 Prague in summer, 06:00 in winter).
-    - cron: "0 5 * * 5"
+    # Wednesdays and Fridays at 05:00 UTC (07:00 Prague in summer, 06:00 in
+    # winter), so a midweek postponement is picked up before the weekend.
+    - cron: "0 5 * * 3,5"
   workflow_dispatch:
     inputs:
       allow_shrink:
@@ -46,8 +47,14 @@ jobs:
           # would delete fixtures from every subscriber's calendar. Genuine
           # losses (a cancelled match, end of season) go through a manual run
           # with allow_shrink enabled.
-          before=$(git show "HEAD:$OUT" | grep -c '^BEGIN:VEVENT' || echo 0)
-          after=$(grep -c '^BEGIN:VEVENT' "$OUT" || echo 0)
+          # tools/simulate_change.py plants an event under a known UID to test
+          # client behaviour, and this job is what removes it again. Leaving it
+          # in the count would make that removal look like a broken scrape.
+          count() { grep -c '^BEGIN:VEVENT' || true; }
+          fakes() { grep -c '^UID:simulated-test@' || true; }
+          published=$(git show "HEAD:$OUT")
+          before=$(( $(printf '%s' "$published" | count) - $(printf '%s' "$published" | fakes) ))
+          after=$(count < "$OUT")
           echo "events: $before -> $after"
           if [ "$after" -lt "$before" ]; then
             echo "::error::Calendar shrank from $before to $after events; refusing to commit."

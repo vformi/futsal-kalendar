@@ -1,70 +1,95 @@
-# Futsal Plzeň — sdílený kalendář
+# Futsal Plzeň calendar
 
-Scrapuje rozpis týmu z [futsalvplzni.cz](https://futsalvplzni.cz/rozpis), převádí ho na `.ics`
-a publikuje přes GitHub Pages. Kdo si kalendář jednou přidá jako odběr, dostává změny
-automaticky — nic nestahuje znovu.
+Turns a team's schedule on [futsalvplzni.cz](https://futsalvplzni.cz/rozpis) into an
+`.ics` feed. Subscribe once; postponements arrive on their own.
 
-## Odběr
+**Spitfire:** `https://vformi.github.io/futsal-kalendar/spitfire.ics`
 
-```
-https://vformi.github.io/futsal-kalendar/spitfire.ics
-```
+- **Google Calendar** — Other calendars → + → From URL
+- **Apple Calendar** — File → New Calendar Subscription → set *Auto-refresh* to
+  something other than the weekly default
+- **Outlook** — Add calendar → Subscribe from web
 
-- **Google Calendar**: Jiné kalendáře → + → Přidat pomocí URL
-- **Apple Kalendář**: Soubor → Nový odběr kalendáře
-- **Outlook**: Přidat kalendář → Odebírat z webu
+## Run it for your own team
 
-Google i Apple si kalendář obnovují vlastním tempem (typicky několik hodin až den).
-Interval nelze z naší strany ovlivnit.
+Works for any of the 72 teams the schedule page lists, not just Spitfire.
 
-## Aktualizace
+1. Fork this repo.
+2. In `.github/workflows/update-calendar.yml`, set `FUTSAL_TEAM` to your team and
+   `OUT` to the filename you want. The name is matched as a substring, ignoring
+   case and diacritics, so `Legion` finds `FC Legion`.
+3. Settings → Pages → deploy from `main`, folder `/`.
+4. Actions → Update calendar → Run workflow.
 
-GitHub Actions (`.github/workflows/update-calendar.yml`) běží **každý pátek v 05:00 UTC**
-a commitne `spitfire.ics`, jen když se rozpis skutečně změnil. Ruční spuštění:
-záložka Actions → Update calendar → Run workflow.
+Your feed is then at `https://<you>.github.io/<repo>/<OUT>`.
 
-Pozor: GitHub vypíná naplánované workflow po ~60 dnech nečinnosti repozitáře. Commity
-z tohoto jobu se počítají jako aktivita, takže se to za sezóny drží samo; mimo sezónu
-může být potřeba job znovu zapnout.
-
-## Archiv odehraných zápasů
-
-Web zveřejňuje **jen nadcházející zápasy** — odehraný zápas z rozpisu zmizí. Skript proto
-události s termínem v minulosti přebírá z už publikovaného `.ics` a nechává je v kalendáři,
-jinak by odběratelům historie sezóny mizela týden po týdnu. Zápas, který zmizí a je stále
-v budoucnosti, je považován za zrušený a odstraní se.
-
-Díky tomu počet událostí nikdy legitimně neklesá, což hlídá krok *Guard against a broken
-scrape*: když se změní HTML webu a parser vrátí neúplný rozpis, job spadne místo toho, aby
-smazal zápasy všem odběratelům. Skutečný úbytek (zrušený zápas, konec sezóny) se commitne
-ručním spuštěním workflow se zapnutým `allow_shrink`.
-
-## Jak se zachází s odloženými zápasy
-
-UID události je odvozené z identity zápasu (soutěž + domácí + hosté), **ne** z data výkopu.
-Odložený zápas si tak drží stejné UID a v kalendáři odběratele se aktualizuje na místě —
-nezmizí a neobjeví se jako nová událost, takže připomínky a poznámky zůstávají. Při změně
-termínu, haly nebo soupeře se inkrementuje `SEQUENCE` a obnoví `LAST-MODIFIED`.
-
-Předpoklad: dvojice týmů se v jedné soutěži nepotká dvakrát se stejným pořadím
-domácí/hosté. Odveta má prohozené strany, takže je to jiné UID. Kdyby některá soutěž
-zavedla formát, kde se stejná strana hraje doma dvakrát, bylo by potřeba do identity
-přidat číslo kola. Na aktuálních datech ke kolizi nedochází.
-
-Časy se zapisují jako UTC instanty (`DTSTART:...Z`), ne jako odkaz na `TZID`. Kalendář tak
-nepotřebuje komponentu `VTIMEZONE` a nemůže se rozjet v klientovi bez vlastní tz databáze.
-
-## Lokální spuštění
+Check it locally first:
 
 ```bash
 python -m venv .venv && .venv/bin/pip install -r requirements.txt
-.venv/bin/python run.py --team Spitfire --ics --out spitfire.ics
+.venv/bin/python run.py --team "FC Legion"            # print the schedule
+.venv/bin/python run.py --team "FC Legion" --ics --out legion.ics
 ```
 
-Bez `--ics` jen vypíše rozpis. Název týmu se hledá jako podřetězec, nezáleží na diakritice
-ani velikosti písmen. Lze ho místo `--team` předat proměnnou `FUTSAL_TEAM`.
+## How it stays current
 
-## Jiný tým
+A GitHub Action runs **Wednesdays and Fridays at 05:00 UTC** and commits only when
+the schedule actually changed. Subscribers re-fetch on their own client's interval —
+GitHub Pages caches for 10 minutes, and Google is typically hours slower than that.
 
-V `.github/workflows/update-calendar.yml` změň `FUTSAL_TEAM` a `OUT`. Pro víc týmů naráz
-přidej další kroky se stejným skriptem a jiným výstupním souborem.
+GitHub disables scheduled workflows after ~60 days of repo inactivity. The job's own
+commits count, so this holds during a season; expect to re-enable it after the break.
+
+## What it gets right
+
+**Postponements update in place.** Event UIDs come from the fixture's identity —
+competition, home, away — never its kickoff time. A postponed match keeps its UID,
+so clients move the existing event and bump `SEQUENCE` instead of deleting one event
+and adding an unrelated new one.
+
+**Played matches stay.** The site lists upcoming fixtures only. Events whose kickoff
+has passed are carried over from the published file, so a season's history doesn't
+drain out of subscribers' calendars a week at a time. A fixture that disappears while
+still in the future is treated as cancelled and dropped.
+
+**Times can't drift.** Events are written as UTC instants rather than `TZID`
+references, so no `VTIMEZONE` component is needed and clients without a timezone
+database can't shift them.
+
+**A broken scrape can't wipe your calendar.** Because played fixtures are retained,
+the event count never falls on its own. If it does — the site changed its markup and
+the parser returned a partial schedule — the job fails instead of committing. Genuine
+losses go through a manual run with `allow_shrink`.
+
+## Testing that updates land
+
+Verifying a postponement needs a change to react to, and the league only provides those
+on its own schedule. `tools/simulate_change.py` stages one, writing exactly what
+`run.py` would: same UID, new `SEQUENCE`, `LAST-MODIFIED` and fixture signature.
+
+```bash
+# a match appears
+python tools/simulate_change.py spitfire.ics --add-fake --at 22:15
+
+# it is postponed, and moves venue -- same UID, so it must not duplicate
+python tools/simulate_change.py spitfire.ics --uid simulated-test --at 22:45 \
+  --venue "Slavie 3" --note "postponed"
+
+# clean up (or let the next scheduled run do it)
+python tools/simulate_change.py spitfire.ics --remove-fake
+```
+
+Commit and push between steps. Subscribed calendars are read-only in every client, so
+the event's own fields have to carry the change you're watching for.
+
+The synthetic event uses UID `simulated-test@futsalvplzni`. While its start time is
+still ahead, the scheduled job removes it by itself and the shrink guard ignores it.
+Left running past its own kickoff it counts as a played fixture and gets archived, so
+clean it up with `--remove-fake`.
+
+Real fixtures can be moved the same way; the next run restores the true time from the
+site.
+
+```bash
+python tools/simulate_change.py spitfire.ics --index 0 --at "2026-09-08 20:00"
+```
